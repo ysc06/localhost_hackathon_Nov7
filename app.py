@@ -1,16 +1,16 @@
 """
 Streamlit UI. Run with:  uv run streamlit run app.py
 
-Works BEFORE integration: if coordinator.py / private_agent.py / friends.py
-are missing or broken, it falls back to fake functions so the UI can be tested.
+Works BEFORE integration: if private_agent.py / friends.py are missing or
+broken, it falls back to fake functions so the UI can be tested.
 """
 
 import random
 
 import streamlit as st
 
+from coordinator import group_message, negotiate
 from models import (
-    BUDGET_TIERS,
     SHAREABLE_FIELDS,
     Friend,
     Plan,
@@ -18,7 +18,6 @@ from models import (
     Vote,
     battery_to_energy,
     budget_to_tier,
-    load_activities,
 )
 
 # ---------- Real code if available, fakes otherwise ----------
@@ -111,75 +110,6 @@ except Exception:
         return SharedProfile(**shared_values)
 
 
-try:
-    from coordinator import negotiate
-
-    COORD_IS_REAL = True
-except Exception:
-    COORD_IS_REAL = False
-
-    def match_score(plan: Plan, profiles: list[SharedProfile]) -> int:
-        """How well a plan matches the anonymous hints (higher = better)."""
-        score = 0
-        for profile in profiles:
-            if plan.activity in profile.wishes:
-                score += 2
-            if profile.budget_tier:
-                max_budget = BUDGET_TIERS[profile.budget_tier][1]
-                score += 1 if plan.price_min <= max_budget else -2
-            wants_calm = profile.energy == "low" or profile.mood == "tired"
-            wants_lively = profile.energy == "high" or profile.mood == "festive"
-            if wants_calm:
-                score += {"low": 1, "medium": 0, "high": -1}[plan.noise]
-            if wants_lively and plan.noise == "high":
-                score += 1
-        return score
-
-    def negotiate(profiles: list[SharedProfile], voters, max_rounds: int = 3):
-        # The coordinator only sees anonymous profiles and sealed voters, never a Friend.
-        catalog = load_activities()
-        anyone_shared = any(profile.model_dump(exclude_defaults=True) for profile in profiles)
-        rejected_ids: set[int] = set()
-        candidates, votes, round_number = [], [], 0
-        for round_number in range(1, max_rounds + 1):
-            remaining_plans = [plan for plan in catalog if plan.id not in rejected_ids]
-            if not remaining_plans:
-                break
-            if anyone_shared:  # shortlist the 5 best matches
-                candidates = sorted(
-                    remaining_plans,
-                    key=lambda plan: (-match_score(plan, profiles), random.random()),
-                )[:5]
-            else:  # nothing shared -> full catalog, voters decide everything
-                candidates = remaining_plans
-            votes = [voter(candidates) for voter in voters]
-            acceptable = [
-                index
-                for index in range(len(candidates))
-                if not any(vote.veto[index] for vote in votes)
-            ]
-            if acceptable:
-                best_index = max(
-                    acceptable, key=lambda index: min(vote.scores[index] for vote in votes)
-                )
-                return candidates[best_index], candidates, votes, round_number
-            rejected_ids |= {
-                plan.id for plan in candidates
-            }  # coordinator only learns "these IDs failed"
-        return None, candidates, votes, round_number
-
-
-try:
-    from coordinator import group_message
-except Exception:
-
-    def group_message(plan: Plan) -> str:
-        return (
-            f"Plan for tonight: {plan.name} at {plan.start_hour}:00, "
-            f"${plan.price_min}-{plan.price_max} 🎉"
-        )
-
-
 SHARE_LABELS = {
     "budget_tier": "Budget tier (low / medium / high)",
     "energy": "Energy level (from my battery)",
@@ -199,7 +129,7 @@ with st.sidebar:
     st.markdown("**Status**")
     st.write(("✅" if VOTE_IS_REAL else "🧪 fake") + " private votes")
     st.write(("✅" if SHARE_IS_REAL else "🧪 fake") + " shared profiles")
-    st.write(("✅" if COORD_IS_REAL else "🧪 fake") + " coordinator")
+    st.write("✅ coordinator")
 
 if "friends" not in st.session_state:
     st.session_state.friends = [friend.model_copy() for friend in DEFAULT_FRIENDS]

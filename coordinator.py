@@ -10,9 +10,12 @@ Privacy by design:
 - Activity prices / hours / noise are public venue data, so using them is fine.
 """
 
+import logging
 import os
 import re
+import sys
 from collections import Counter
+from functools import cache
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -21,8 +24,9 @@ from pydantic import BaseModel
 from models import BUDGET_TIERS, Plan, SharedProfile, Vote, Voter, load_activities
 
 load_dotenv()
+log = logging.getLogger(__name__)
 MODEL = os.getenv("LLM_MODEL", "qwen2.5:3b")
-OLLAMA_BASE_URL = "http://localhost:11434/v1"
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 LLM_TIMEOUT_SECONDS = 60
 # Local inference (Ollama): the prompt never leaves this machine.
 client = OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama", timeout=LLM_TIMEOUT_SECONDS)
@@ -35,6 +39,12 @@ LEVEL = {"low": 0, "medium": 1, "high": 2}
 WISH_MATCH_BONUS = 3
 WITHIN_BUDGET_BONUS = 1
 OVER_BUDGET_PENALTY = -3
+
+
+@cache
+def _catalog() -> tuple[Plan, ...]:
+    """Public activity catalog, read from disk once per process."""
+    return tuple(load_activities())
 
 
 class Proposal(BaseModel):
@@ -77,10 +87,8 @@ def summarize_hints(profiles: list[SharedProfile]) -> str:
     Even though profiles are already anonymous, the LLM only sees totals
     ("energy: 1 low, 1 high"), so it can't reason about any single person.
     """
-    lines = [
-        f"{len(profiles)} people in the group; "
-        f"{sum(not has_hints(profile) for profile in profiles)} shared nothing."
-    ]
+    nobody_count = sum(not has_hints(profile) for profile in profiles)
+    lines = [f"{len(profiles)} people in the group; {nobody_count} shared nothing."]
     for field in ["budget_tier", "energy", "mood"]:
         counts = Counter(getattr(profile, field) for profile in profiles if getattr(profile, field))
         if counts:
@@ -163,9 +171,7 @@ def propose_plans(
     try:
         return clean_shortlist(llm_shortlist(remaining, profiles, rejected), ranked)
     except Exception as error:  # the demo must never crash
-        print(
-            f"[coordinator] LLM shortlist failed ({type(error).__name__}), using rule-based ranking"
-        )
+        log.warning("LLM shortlist failed (%s), using rule-based ranking", type(error).__name__)
         return ranked[:SHORTLIST_SIZE]
 
 
@@ -193,7 +199,7 @@ def negotiate(
     max_rounds is capped low on purpose: each failed round tells the coordinator
     a little (which ids failed), so few rounds limits guessing budgets by bisection.
     """
-    activities = load_activities()
+    activities = list(_catalog())
     rejected_ids: set[int] = set()
     plans: list[Plan] = []
     votes: list[Vote] = []
@@ -258,12 +264,14 @@ def group_message(plan: Plan) -> str:
             return fallback_message(plan)
         return text
     except Exception as error:  # the demo must never crash
-        print(f"[coordinator] LLM message failed ({type(error).__name__}), using template")
+        log.warning("LLM message failed (%s), using template", type(error).__name__)
         return fallback_message(plan)
 
 
 # ---------- Tests (fake profiles + fake sealed voters) ----------
 if __name__ == "__main__":
+    sys.stdout.reconfigure(encoding="utf-8")  # emojis on Windows cp1252 consoles
+    logging.basicConfig(level=logging.INFO, format="[%(name)s] %(message)s")
 
     def fake_voter(plans: list[Plan]) -> Vote:
         # Stands in for a private agent: vetoes anything over $20, scores deterministically.
