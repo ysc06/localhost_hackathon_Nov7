@@ -10,6 +10,7 @@ Privacy by design:
 - Activity prices / hours / noise are public venue data, so using them is fine.
 """
 import os
+import re
 from collections import Counter
 
 from dotenv import load_dotenv
@@ -186,9 +187,45 @@ def negotiate(profiles: list[SharedProfile], voters: list[Voter], max_rounds: in
     return None, plans, votes, rounds_used
 
 
-def group_message(plan: Plan) -> str:
-    """Temporary version (replaced by the LLM one in B3)."""
+class GroupMessage(BaseModel):
+    message: str
+
+
+def fallback_message(plan: Plan) -> str:
     return f"Plan for tonight: {plan.name} at {plan.start_hour}:00, ${plan.price_min}-{plan.price_max} 🎉"
+
+
+def group_message(plan: Plan) -> str:
+    """Short group-chat message. Built ONLY from the public plan: the LLM never sees votes or profiles."""
+    prompt = (
+        "Write a group chat message announcing tonight's plan.\n"
+        "Rules: at most 2 short lines, 1 or 2 emojis, use ONLY these facts, invent nothing "
+        "(no end time, no other prices, addresses or names, no hashtags, no 'reserve now').\n\n"
+        f"Name: {plan.name}\nStart: {plan.start_hour}:00\n"
+        f"Price per person: ${plan.price_min}-{plan.price_max}\nDescription: {plan.description}\n\n"
+        'Answer with JSON only: {"message": "..."}'
+    )
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0.7,
+        )
+        text = GroupMessage.model_validate_json(response.choices[0].message.content).message
+        text = re.sub(r"\s*#\w+", "", text)  # small models love hashtags
+        lines = [line.strip() for line in text.splitlines() if line.strip()][:2]  # max 2 lines
+        text = "\n".join(lines)
+        # Cheap hallucination guard: every number must come from the plan (e.g. no invented end time).
+        allowed_numbers = {"00"} | {str(n) for n in (plan.start_hour, plan.start_hour - 12,
+                                                     plan.price_min, plan.price_max)}
+        allowed_numbers |= set(re.findall(r"\d+", plan.name + " " + plan.description))
+        if not text or any(number not in allowed_numbers for number in re.findall(r"\d+", text)):
+            return fallback_message(plan)
+        return text
+    except Exception as error:  # the demo must never crash
+        print(f"[coordinator] LLM message failed ({type(error).__name__}), using template")
+        return fallback_message(plan)
 
 
 # ---------- Tests (fake profiles + fake sealed voters) ----------
@@ -265,4 +302,16 @@ if __name__ == "__main__":
     # min:     plan 0 = 2,   plan 1 = 5   -> we pick plan 1 (nobody below 5/10)
     assert pick_plan(two, votes) == two[1]
     print("min vs average: picked", pick_plan(two, votes).name, "(average would pick", two[0].name + ")")
-    print("\nAll B1 + B2 assertions passed.")
+    # B3: group message (LLM, then template if offline)
+    karaoke = next(plan for plan in catalog if plan.activity == "karaoke")
+    print("\n=== B3 group message ===")
+    for _ in range(3):
+        message = group_message(karaoke)
+        print(("[template] " if message == fallback_message(karaoke) else "[llm] ") + message)
+        assert 0 < len(message.splitlines()) <= 2 and "#" not in message
+    client = OpenAI(base_url="http://localhost:1/v1", api_key="x", timeout=2, max_retries=0)
+    print("offline ->", group_message(karaoke))
+    assert group_message(karaoke) == fallback_message(karaoke)
+    client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama", timeout=60)
+
+    print("\nAll B1 + B2 + B3 assertions passed.")
