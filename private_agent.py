@@ -16,12 +16,12 @@ from models import Friend, Plan, Vote
 
 load_dotenv()
 
-# Local Llama via Ollama by default (private data never leaves the laptop).
+# Voting LLM: local Llama via Ollama by default, or Tinfoil (confidential inference) via VOTE_LLM_* in .env.
 client = OpenAI(
-    base_url=os.getenv("LLM_BASE_URL", "http://localhost:11434/v1"),
-    api_key=os.getenv("LLM_API_KEY", "ollama"),
+    base_url=os.getenv("VOTE_LLM_BASE_URL", "http://localhost:11434/v1"),
+    api_key=os.getenv("VOTE_LLM_API_KEY", "ollama"),
 )
-MODEL = os.getenv("LLM_MODEL", "llama3.2:3b")
+MODEL = os.getenv("VOTE_LLM_MODEL", "llama3.2:3b")
 
 LEVEL = {"low": 0, "medium": 1, "high": 2}
 
