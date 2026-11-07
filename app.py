@@ -9,6 +9,7 @@ import random
 
 import streamlit as st
 
+from booking_agent import discover_options
 from coordinator import group_message, negotiate
 from models import (
     SHAREABLE_FIELDS,
@@ -255,3 +256,45 @@ with tabs[-1]:
                 ":gray[exact budget · free time · social battery number · "
                 "tastes text · how my day went · names]"
             )
+
+        # ---------- Discovery & Booking Agent (only the public winning plan leaves) ----------
+        if winner:
+            st.divider()
+            st.markdown("### Turn Your Plan Into Reality 🚀")
+            st.caption(f"Winning activity: **{winner.name}**. Only this public plan + "
+                       "the city/date below are sent to Google. No friend data, votes or memory.")
+            city_column, date_column = st.columns(2)
+            city = city_column.text_input("📍 City / location", "New York")
+            date = date_column.date_input("📅 Date (optional)", value=None)
+
+            buttons = st.columns(3)
+            for column, (label, kind) in zip(buttons, [("📍 Find Places", "places"),
+                                                       ("🎟️ Find Events & Tickets", "events"),
+                                                       ("📅 Find Booking Options", "booking")]):
+                if column.button(label, use_container_width=True):
+                    st.session_state.discovery = (kind, discover_options(winner, city, date))
+
+            if "discovery" in st.session_state:
+                kind, found = st.session_state.discovery
+                if found["error"]:
+                    st.warning(found["error"])
+                if kind == "places" and found["places"]:
+                    for place in found["places"]:
+                        rating = f" · ⭐ {place['rating']}" if place["rating"] else ""
+                        st.markdown(f"**{place['name']}**{rating}  \n{place['address']}  \n"
+                                    f"[Open in Google Maps]({place['maps_url']})")
+                elif kind == "places":
+                    st.caption("Google Places API not configured: showing a live search instead.")
+                st.link_button(f"Open {kind} search ↗", found["links"][kind])
+                st.caption("We link out to real search results. We never complete or fake a booking.")
+
+    # ---------- Business model (proposed, not live) ----------
+    with st.expander("💰 How We Make Money"):
+        st.markdown(
+            "**Proposed revenue models: none of these are active integrations today.**\n\n"
+            "- **Affiliate commissions** on eligible event and activity bookings\n"
+            "- **Referral revenue** from future business partnerships (venues, restaurants)\n"
+            "- **Premium AI concierge**: recurring group plans, smarter memory, priority booking help\n\n"
+            ":gray[Currently live: plain Google Maps / Search links, plus Google Places "
+            "results only if an API key is configured. No affiliate tracking, no payments.]"
+        )
