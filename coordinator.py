@@ -9,10 +9,27 @@ Privacy by design:
 - When a round fails it learns only WHICH plan ids were vetoed, never why or by whom.
 - Activity prices / hours / noise are public venue data, so using them is fine.
 """
+import os
+from collections import Counter
+
+from dotenv import load_dotenv
+from openai import OpenAI
+from pydantic import BaseModel
+
 from models import BUDGET_TIERS, Plan, SharedProfile, Vote, Voter, load_activities
+
+load_dotenv()
+MODEL = os.getenv("LLM_MODEL", "qwen2.5:3b")
+# Local inference (Ollama): the prompt never leaves this machine.
+client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama", timeout=60)
 
 SHORTLIST_SIZE = 5
 LEVEL = {"low": 0, "medium": 1, "high": 2}
+
+
+class Proposal(BaseModel):
+    """The only thing we accept back from the LLM."""
+    plan_ids: list[int]
 
 
 def has_hints(profile: SharedProfile) -> bool:
@@ -38,15 +55,93 @@ def hint_score(plan: Plan, profiles: list[SharedProfile]) -> int:
     return score
 
 
+def rank_by_hints(plans: list[Plan], profiles: list[SharedProfile]) -> list[Plan]:
+    """Rule-based ranking (B1). Deterministic: ties broken by plan id."""
+    return sorted(plans, key=lambda plan: (-hint_score(plan, profiles), plan.id))
+
+
+def summarize_hints(profiles: list[SharedProfile]) -> str:
+    """Aggregate the hints into COUNTS before they reach the LLM.
+
+    Even though profiles are already anonymous, the LLM only sees totals
+    ("energy: 1 low, 1 high"), so it can't reason about any single person.
+    """
+    lines = [f"{len(profiles)} people in the group; "
+             f"{sum(not has_hints(profile) for profile in profiles)} shared nothing."]
+    for field in ["budget_tier", "energy", "mood"]:
+        counts = Counter(getattr(profile, field) for profile in profiles if getattr(profile, field))
+        if counts:
+            shared = ", ".join(f"{count} {value}" for value, count in sorted(counts.items()))
+            lines.append(f"{field} ({sum(counts.values())} shared): {shared}")
+    wishes = Counter(wish for profile in profiles for wish in profile.wishes)
+    if wishes:
+        lines.append("wishes: " + ", ".join(f"{wish} x{count}" for wish, count in sorted(wishes.items())))
+    return "\n".join(lines)
+
+
+def describe_plan(plan: Plan) -> str:
+    """Public venue info only."""
+    return (f"{plan.id}: {plan.name} | {plan.activity} | ${plan.price_min}-{plan.price_max} | "
+            f"{plan.start_hour}:00 | noise {plan.noise} | crowd {plan.crowd}")
+
+
+def llm_shortlist(candidates: list[Plan], profiles: list[SharedProfile],
+                  rejected: list[Plan]) -> list[int]:
+    """Ask the LLM for SHORTLIST_SIZE plan ids. Raises on any failure (caller falls back)."""
+    tiers = ", ".join(f"{tier} = ${low}-{high}" for tier, (low, high) in BUDGET_TIERS.items())
+    prompt = (
+        "Pick plans for a group evening.\n\n"
+        "CANDIDATE PLANS (id: name | activity | price per person | start | noise | crowd):\n"
+        + "\n".join(describe_plan(plan) for plan in candidates)
+        + "\n\nANONYMOUS GROUP HINTS (aggregated counts, budget tiers: " + tiers + "):\n"
+        + summarize_hints(profiles)
+        + "\n\nALREADY REJECTED BY THE GROUP (do not propose again): "
+        + (", ".join(plan.name for plan in rejected) or "none")
+        + f"\n\nChoose exactly {SHORTLIST_SIZE} different plan ids from the candidates that fit "
+          "the hints, but keep some variety for the people who shared nothing.\n"
+          'Answer with JSON only: {"plan_ids": [id, id, id, id, id]}'
+    )
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "system", "content": "You are a helpful event planner. Output JSON only."},
+                  {"role": "user", "content": prompt}],
+        response_format={"type": "json_object"},
+        temperature=0,
+    )
+    return Proposal.model_validate_json(response.choices[0].message.content).plan_ids
+
+
+def clean_shortlist(llm_ids: list[int], ranked: list[Plan]) -> list[Plan]:
+    """Safety net: keep only real candidate ids, dedupe, then top up from the rule-based ranking."""
+    by_id = {plan.id: plan for plan in ranked}
+    shortlist: list[Plan] = []
+    for plan_id in llm_ids:
+        if plan_id in by_id and by_id[plan_id] not in shortlist:
+            shortlist.append(by_id[plan_id])
+    for plan in ranked:  # fill (never random) if the LLM gave fewer than 5 valid ids
+        if len(shortlist) >= SHORTLIST_SIZE:
+            break
+        if plan not in shortlist:
+            shortlist.append(plan)
+    return shortlist[:SHORTLIST_SIZE]
+
+
 def propose_plans(activities: list[Plan], profiles: list[SharedProfile],
                   rejected_ids: set[int]) -> list[Plan]:
-    """Shortlist candidate plans. Deterministic: same input, same output."""
+    """Shortlist candidate plans: LLM first, rule-based ranking as a safety net."""
     remaining = [plan for plan in activities if plan.id not in rejected_ids]
     if not any(has_hints(profile) for profile in profiles):
-        # Nobody shared anything: no basis to filter, the private votes decide everything.
+        # Nobody shared anything: no basis to filter (and no LLM call), the private votes decide.
         return remaining
-    ranked = sorted(remaining, key=lambda plan: (-hint_score(plan, profiles), plan.id))
-    return ranked[:SHORTLIST_SIZE]
+    ranked = rank_by_hints(remaining, profiles)
+    if len(remaining) <= SHORTLIST_SIZE:
+        return ranked  # nothing to choose: skip the LLM
+    rejected = [plan for plan in activities if plan.id in rejected_ids]
+    try:
+        return clean_shortlist(llm_shortlist(remaining, profiles, rejected), ranked)
+    except Exception as error:  # the demo must never crash
+        print(f"[coordinator] LLM shortlist failed ({type(error).__name__}), using rule-based ranking")
+        return ranked[:SHORTLIST_SIZE]
 
 
 def pick_plan(plans: list[Plan], votes: list[Vote]) -> Plan | None:
@@ -121,12 +216,39 @@ if __name__ == "__main__":
 
     # (b) one user shares karaoke + festive -> karaoke ranked first
     one_shares = [SharedProfile(), SharedProfile(wishes=["karaoke"], mood="festive"), SharedProfile()]
-    ranked = propose_plans(catalog, one_shares, set())
+    ranked = rank_by_hints(catalog, one_shares)[:SHORTLIST_SIZE]
     print("\n=== (b) one profile: wishes=['karaoke'], mood='festive' ===")
+    print("rule-based ranking (fallback):")
     for plan in ranked:
         print(f"  score {hint_score(plan, one_shares):+d}  {plan.name} ({plan.activity})")
     assert ranked[0].activity == "karaoke" and len(ranked) == 5
+    print("\nhint summary sent to the LLM:\n" + summarize_hints(one_shares))
+    shortlist = propose_plans(catalog, one_shares, set())
+    print("LLM shortlist:", [plan.name for plan in shortlist])
+    assert len(shortlist) == 5 and len({plan.id for plan in shortlist}) == 5
     show("(b) negotiate", negotiate(one_shares, [fake_voter] * 3))
+
+    # (b') richer anonymous hints
+    mixed = [SharedProfile(energy="low", mood="tired", wishes=["cinema"]),
+             SharedProfile(budget_tier="low", energy="high", wishes=["karaoke"]),
+             SharedProfile()]
+    summary = summarize_hints(mixed)
+    print("\n=== (b') mixed hints ===\nhint summary sent to the LLM:\n" + summary)
+    for private_word in ["Lea", "Sam", "Maya", "budget=", "battery", "day"]:
+        assert private_word not in summary, private_word
+    print("LLM shortlist:", [plan.name for plan in propose_plans(catalog, mixed, set())])
+
+    # Safety net: bad / duplicate / missing ids are cleaned and topped up (not random)
+    cleaned = clean_shortlist([99, 3, 3, -1], rank_by_hints(catalog, mixed))
+    print("\nclean_shortlist([99, 3, 3, -1]) ->", [plan.id for plan in cleaned])
+    assert cleaned[0].id == 3 and len(cleaned) == 5 and len({plan.id for plan in cleaned}) == 5
+
+    # LLM unreachable -> rule-based ranking, no crash
+    client = OpenAI(base_url="http://localhost:1/v1", api_key="x", timeout=2, max_retries=0)
+    offline = propose_plans(catalog, one_shares, set())
+    assert offline == ranked
+    print("LLM offline ->", [plan.name for plan in offline])
+    client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama", timeout=60)
 
     # (c) everything vetoed -> None, never more than 3 rounds
     result = negotiate(one_shares, [veto_everything] * 3)
@@ -143,4 +265,4 @@ if __name__ == "__main__":
     # min:     plan 0 = 2,   plan 1 = 5   -> we pick plan 1 (nobody below 5/10)
     assert pick_plan(two, votes) == two[1]
     print("min vs average: picked", pick_plan(two, votes).name, "(average would pick", two[0].name + ")")
-    print("\nAll B1 assertions passed.")
+    print("\nAll B1 + B2 assertions passed.")
