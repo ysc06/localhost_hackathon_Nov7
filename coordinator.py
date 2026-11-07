@@ -24,7 +24,17 @@ from pydantic import BaseModel
 from models import BUDGET_TIERS, Plan, SharedProfile, Vote, Voter, load_activities
 
 load_dotenv()
-log = logging.getLogger(__name__)
+
+# Audit log: prints EVERYTHING the coordinator receives, so anyone can check that no
+# name, exact budget, battery or free text ever reaches it. Own handler, so it shows
+# up in the Streamlit terminal too. Silence with COORDINATOR_LOG_LEVEL=WARNING.
+log = logging.getLogger("coordinator")
+if not log.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("[coordinator] %(message)s"))
+    log.addHandler(_handler)
+    log.setLevel(os.getenv("COORDINATOR_LOG_LEVEL", "INFO"))
+    log.propagate = False
 MODEL = os.getenv("LLM_MODEL", "qwen2.5:3b")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 LLM_TIMEOUT_SECONDS = 60
@@ -163,13 +173,21 @@ def propose_plans(
     remaining = [plan for plan in activities if plan.id not in rejected_ids]
     if not any(has_hints(profile) for profile in profiles):
         # Nobody shared anything: no basis to filter (and no LLM call), the private votes decide.
+        log.info("  shortlist: nobody shared anything -> full catalog (%d plans), no LLM call",
+                 len(remaining))
         return remaining
     ranked = rank_by_hints(remaining, profiles)
     if len(remaining) <= SHORTLIST_SIZE:
+        log.info("  shortlist: only %d plans left -> rule-based ranking, no LLM call", len(remaining))
         return ranked  # nothing to choose: skip the LLM
     rejected = [plan for plan in activities if plan.id in rejected_ids]
+    log.info("  shortlist: hint summary sent to the LLM (counts only):")
+    for line in summarize_hints(profiles).splitlines():
+        log.info("    %s", line)
     try:
-        return clean_shortlist(llm_shortlist(remaining, profiles, rejected), ranked)
+        llm_ids = llm_shortlist(remaining, profiles, rejected)
+        log.info("  shortlist: LLM answered plan ids %s", llm_ids)
+        return clean_shortlist(llm_ids, ranked)
     except Exception as error:  # the demo must never crash
         log.warning("LLM shortlist failed (%s), using rule-based ranking", type(error).__name__)
         return ranked[:SHORTLIST_SIZE]
@@ -204,18 +222,36 @@ def negotiate(
     plans: list[Plan] = []
     votes: list[Vote] = []
     rounds_used = 0
+
+    log.info("=" * 60)
+    log.info("NEW NEGOTIATION: everything the coordinator receives")
+    log.info("%d anonymous profiles (shuffled, only what users ticked):", len(profiles))
+    for profile in profiles:
+        log.info("  %s", profile.model_dump_json(exclude_defaults=True).replace("{}", "nothing shared"))
+    log.info("%d sealed voters (callables: plans in, Vote out; no Friend inside)", len(voters))
+
     while rounds_used < max_rounds:
         candidates = propose_plans(activities, profiles, rejected_ids)
         if not candidates:  # catalog exhausted: stop early
+            log.info("catalog exhausted after %d round(s)", rounds_used)
             break
         rounds_used += 1
         plans = candidates
+        log.info("round %d: proposing %s", rounds_used, [f"{p.id}:{p.name}" for p in plans])
         votes = [voter(plans) for voter in voters]
+        log.info("round %d: votes received (anonymous, no reasons):", rounds_used)
+        for vote in votes:
+            log.info("  veto=%s scores=%s", vote.veto, vote.scores)
         winner = pick_plan(plans, votes)
         if winner:
+            log.info("round %d: winner = %s (best lowest score among non-vetoed)",
+                     rounds_used, winner.name)
             return winner, plans, votes, rounds_used
         # Only reached if every plan was vetoed. We learn the ids, not the reasons.
         rejected_ids |= {plan.id for plan in plans}
+        log.info("round %d: every plan vetoed -> rejected ids so far %s (no reasons, no names)",
+                 rounds_used, sorted(rejected_ids))
+    log.info("no plan works for everyone after %d round(s)", rounds_used)
     return None, plans, votes, rounds_used
 
 
