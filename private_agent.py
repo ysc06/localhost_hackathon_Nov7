@@ -8,6 +8,7 @@ Nothing else ever leaves this file: no reasons, no names, no notes.
 import asyncio
 import json
 import os
+import threading
 
 import cognee
 from dotenv import load_dotenv
@@ -29,6 +30,17 @@ LEVEL = {"low": 0, "medium": 1, "high": 2}
 
 
 # ---------- 0. Private cognee memory: one isolated dataset per friend ----------
+# cognee keeps its DB connections bound to the event loop that opened them, so a fresh
+# asyncio.run() per call breaks ("Event loop is closed"), especially under Streamlit reruns.
+# One long-lived loop in a background thread runs every cognee call.
+_cognee_loop = asyncio.new_event_loop()
+threading.Thread(target=_cognee_loop.run_forever, daemon=True).start()
+
+
+def _run_cognee(coro):
+    return asyncio.run_coroutine_threadsafe(coro, _cognee_loop).result()
+
+
 def _dataset(friend_name: str) -> str:
     return f"{friend_name}_private"
 
@@ -38,16 +50,19 @@ def store_private(friend_name: str, text: str) -> None:
     async def _run():
         await cognee.add(text, dataset_name=_dataset(friend_name))
         await cognee.cognify(datasets=[_dataset(friend_name)])
-    asyncio.run(_run())
+    _run_cognee(_run())
 
 
 def recall_private(friend_name: str, query: str) -> str:
     """Search ONLY this friend's dataset. Returns '' if no memory or cognee fails."""
     async def _run():
+        existing = {dataset.name for dataset in await cognee.datasets.list_datasets()}
+        if _dataset(friend_name) not in existing:
+            return []  # no memory stored yet: skip the search (and cognee's error log)
         return await cognee.search(query_text=query, datasets=[_dataset(friend_name)],
                                    query_type=cognee.SearchType.CHUNKS)
     try:
-        results = asyncio.run(_run())
+        results = _run_cognee(_run())
         return "\n".join(c["text"] for r in results for c in r["search_result"])
     except Exception:
         return ""
