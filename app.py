@@ -267,25 +267,21 @@ with tabs[-1]:
             city = city_column.text_input("📍 City / location", "New York")
             date = date_column.date_input("📅 Date (optional)", value=None)
 
-            buttons = st.columns(3)
-            for column, (label, kind) in zip(buttons, [("📍 Find Places", "places"),
-                                                       ("🎟️ Find Events & Tickets", "events"),
-                                                       ("📅 Find Booking Options", "booking")]):
-                if column.button(label, use_container_width=True):
-                    st.session_state.discovery = (kind, discover_options(winner, city, date))
+            if st.button("📍 Find Places"):
+                st.session_state.discovery = discover_options(winner, city, date)
 
             if "discovery" in st.session_state:
-                kind, found = st.session_state.discovery
+                found = st.session_state.discovery
                 if found["error"]:
                     st.warning(found["error"])
-                if kind == "places" and found["places"]:
+                if found["places"]:
                     for place in found["places"]:
                         rating = f" · ⭐ {place['rating']}" if place["rating"] else ""
                         st.markdown(f"**{place['name']}**{rating}  \n{place['address']}  \n"
                                     f"[Open in Google Maps]({place['maps_url']})")
-                elif kind == "places":
+                else:
                     st.caption("Google Places API not configured: showing a live search instead.")
-                st.link_button(f"Open {kind} search ↗", found["links"][kind])
+                st.link_button("Open places search ↗", found["links"]["places"])
                 st.caption("We link out to real search results. We never complete or fake a booking.")
 
     # ---------- Business model (proposed, not live) ----------
