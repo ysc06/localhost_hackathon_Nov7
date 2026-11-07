@@ -9,3 +9,7 @@ dependencies = [
     "python-dotenv>=1.2.4",
     "streamlit>=1.67.0",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

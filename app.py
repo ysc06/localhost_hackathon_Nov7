@@ -4,13 +4,21 @@ Streamlit UI. Run with:  uv run streamlit run app.py
 Works BEFORE integration: if coordinator.py / private_agent.py / friends.py
 are missing or broken, it falls back to fake functions so the UI can be tested.
 """
+
 import random
 
 import streamlit as st
 
 from models import (
-    BUDGET_TIERS, SHAREABLE_FIELDS, Friend, Plan, SharedProfile, Vote,
-    battery_to_energy, budget_to_tier, load_activities,
+    BUDGET_TIERS,
+    SHAREABLE_FIELDS,
+    Friend,
+    Plan,
+    SharedProfile,
+    Vote,
+    battery_to_energy,
+    budget_to_tier,
+    load_activities,
 )
 
 # ---------- Real code if available, fakes otherwise ----------
@@ -18,29 +26,51 @@ try:
     from friends import FRIENDS as DEFAULT_FRIENDS
 except Exception:
     DEFAULT_FRIENDS = [
-        Friend(name="Lea", budget=30, free_after=19, social_battery=2,
-               tastes="cozy places, movies, board games", day_note="Long exhausting day at work."),
-        Friend(name="Sam", budget=15, free_after=18, social_battery=4,
-               tastes="food, walks, museums", day_note="Chill day, saving money this month."),
-        Friend(name="Maya", budget=60, free_after=20, social_battery=5,
-               tastes="music, karaoke, bars", day_note="Just got good news, wants to celebrate!"),
+        Friend(
+            name="Lea",
+            budget=30,
+            free_after=19,
+            social_battery=2,
+            tastes="cozy places, movies, board games",
+            day_note="Long exhausting day at work.",
+        ),
+        Friend(
+            name="Sam",
+            budget=15,
+            free_after=18,
+            social_battery=4,
+            tastes="food, walks, museums",
+            day_note="Chill day, saving money this month.",
+        ),
+        Friend(
+            name="Maya",
+            budget=60,
+            free_after=20,
+            social_battery=5,
+            tastes="music, karaoke, bars",
+            day_note="Just got good news, wants to celebrate!",
+        ),
     ]
 
 try:
     from private_agent import private_vote
+
     VOTE_IS_REAL = True
 except Exception:
     VOTE_IS_REAL = False
 
     def private_vote(friend: Friend, plans: list[Plan]) -> Vote:
         # Hard constraints are checked privately; only a bare True/False leaves.
-        veto = [plan.price_min > friend.budget or plan.start_hour < friend.free_after
-                for plan in plans]
+        veto = [
+            plan.price_min > friend.budget or plan.start_hour < friend.free_after for plan in plans
+        ]
         scores = [random.randint(0, 10) for _ in plans]
         return Vote(veto=veto, scores=scores)
 
+
 try:
     from private_agent import share_profile
+
     SHARE_IS_REAL = True
 except Exception:
     SHARE_IS_REAL = False
@@ -61,22 +91,29 @@ except Exception:
         # Only ticked fields are filled; everything else stays None / [].
         shared_values = {}
         if "budget_tier" in allowed_fields:
-            shared_values["budget_tier"] = budget_to_tier(friend.budget)  # a bucket, never the amount
+            shared_values["budget_tier"] = budget_to_tier(
+                friend.budget
+            )  # a bucket, never the amount
         if "energy" in allowed_fields:
             shared_values["energy"] = battery_to_energy(friend.social_battery)
         if "mood" in allowed_fields:
             battery = friend.social_battery
-            shared_values["mood"] = "tired" if battery <= 2 else "neutral" if battery == 3 else "festive"
+            shared_values["mood"] = (
+                "tired" if battery <= 2 else "neutral" if battery == 3 else "festive"
+            )
         if "wishes" in allowed_fields:
             tastes = friend.tastes.lower()
             shared_values["wishes"] = [
-                activity for activity, keywords in TASTE_KEYWORDS.items()
+                activity
+                for activity, keywords in TASTE_KEYWORDS.items()
                 if any(keyword in tastes for keyword in keywords)
             ]
         return SharedProfile(**shared_values)
 
+
 try:
     from coordinator import negotiate
+
     COORD_IS_REAL = True
 except Exception:
     COORD_IS_REAL = False
@@ -116,19 +153,31 @@ except Exception:
             else:  # nothing shared -> full catalog, voters decide everything
                 candidates = remaining_plans
             votes = [voter(candidates) for voter in voters]
-            acceptable = [index for index in range(len(candidates))
-                          if not any(vote.veto[index] for vote in votes)]
+            acceptable = [
+                index
+                for index in range(len(candidates))
+                if not any(vote.veto[index] for vote in votes)
+            ]
             if acceptable:
-                best_index = max(acceptable, key=lambda index: min(vote.scores[index] for vote in votes))
+                best_index = max(
+                    acceptable, key=lambda index: min(vote.scores[index] for vote in votes)
+                )
                 return candidates[best_index], candidates, votes, round_number
-            rejected_ids |= {plan.id for plan in candidates}  # coordinator only learns "these IDs failed"
+            rejected_ids |= {
+                plan.id for plan in candidates
+            }  # coordinator only learns "these IDs failed"
         return None, candidates, votes, round_number
+
 
 try:
     from coordinator import group_message
 except Exception:
+
     def group_message(plan: Plan) -> str:
-        return f"Plan for tonight: {plan.name} at {plan.start_hour}:00, ${plan.price_min}-{plan.price_max} 🎉"
+        return (
+            f"Plan for tonight: {plan.name} at {plan.start_hour}:00, "
+            f"${plan.price_min}-{plan.price_max} 🎉"
+        )
 
 
 SHARE_LABELS = {
@@ -140,9 +189,11 @@ SHARE_LABELS = {
 
 # ---------- UI ----------
 st.set_page_config(page_title="No more 'whatever you want'", page_icon="🎯", layout="wide")
-st.title("🎯 No more \"whatever you want\"")
-st.caption("You choose what your agent shares. Share nothing, you're still protected. "
-           "Share more, you get better plans.")
+st.title('🎯 No more "whatever you want"')
+st.caption(
+    "You choose what your agent shares. Share nothing, you're still protected. "
+    "Share more, you get better plans."
+)
 
 with st.sidebar:
     st.markdown("**Status**")
@@ -163,25 +214,39 @@ for friend_index, friend in enumerate(friends):
         st.info(f"Private to {friend.name}. Only what you tick below can leave this tab.")
         sliders_column, notes_column = st.columns(2)
         with sliders_column:
-            battery = st.slider("Social battery 🔋", 1, 5, friend.social_battery,
-                                key=f"battery_{friend_index}")
-            budget = st.slider("Budget ($ max)", 0, 100, friend.budget,
-                               key=f"budget_{friend_index}")
-            free_after = st.slider("Free after (h)", 16, 23, friend.free_after,
-                                   key=f"free_after_{friend_index}")
+            battery = st.slider(
+                "Social battery 🔋", 1, 5, friend.social_battery, key=f"battery_{friend_index}"
+            )
+            budget = st.slider(
+                "Budget ($ max)", 0, 100, friend.budget, key=f"budget_{friend_index}"
+            )
+            free_after = st.slider(
+                "Free after (h)", 16, 23, friend.free_after, key=f"free_after_{friend_index}"
+            )
         with notes_column:
             tastes = st.text_area("Tastes", friend.tastes, key=f"tastes_{friend_index}")
-            day_note = st.text_area("How was my day?", friend.day_note, key=f"day_note_{friend_index}")
-        friends[friend_index] = Friend(name=friend.name, budget=budget, free_after=free_after,
-                                       social_battery=battery, tastes=tastes, day_note=day_note)
+            day_note = st.text_area(
+                "How was my day?", friend.day_note, key=f"day_note_{friend_index}"
+            )
+        friends[friend_index] = Friend(
+            name=friend.name,
+            budget=budget,
+            free_after=free_after,
+            social_battery=battery,
+            tastes=tastes,
+            day_note=day_note,
+        )
 
         st.markdown("#### 📤 Share with the group")
         st.caption("More sharing → better plans. Nothing is required.")
         checkbox_columns = st.columns(len(SHAREABLE_FIELDS))
         # Privacy default: every box starts unchecked (share nothing).
         ticked_fields = {
-            field for column, field in zip(checkbox_columns, SHAREABLE_FIELDS)
-            if column.checkbox(SHARE_LABELS[field], value=False, key=f"share_{friend_index}_{field}")
+            field
+            for column, field in zip(checkbox_columns, SHAREABLE_FIELDS, strict=True)
+            if column.checkbox(
+                SHARE_LABELS[field], value=False, key=f"share_{friend_index}_{field}"
+            )
         }
         allowed_fields_per_friend.append(ticked_fields)
 
@@ -193,17 +258,23 @@ with tabs[-1]:
 
     if st.button("🎲 Find a plan", type="primary"):
         with st.spinner("Agents are voting privately..."):
-            profiles = [share_profile(friend, allowed_fields_per_friend[friend_index])
-                        for friend_index, friend in enumerate(friends)]
+            profiles = [
+                share_profile(friend, allowed_fields_per_friend[friend_index])
+                for friend_index, friend in enumerate(friends)
+            ]
             random.shuffle(profiles)  # anonymous: order no longer matches the friends
             # Sealed voters: the coordinator can ask for a vote, never read the Friend.
-            voters = [lambda plans, friend=friend: private_vote(friend, plans) for friend in friends]
+            voters = [
+                lambda plans, friend=friend: private_vote(friend, plans) for friend in friends
+            ]
             result = negotiate(profiles, voters)
             shuffled_votes = result[2][:]
             random.shuffle(shuffled_votes)  # can't tell whose vote is whose
             st.session_state.result = result
             st.session_state.shuffled_profiles = profiles
             st.session_state.shuffled_votes = shuffled_votes
+            # One LLM call per search, not one per Streamlit rerun.
+            st.session_state.group_message = group_message(result[0]) if result[0] else ""
 
     result = st.session_state.get("result")
     if result:
@@ -212,10 +283,12 @@ with tabs[-1]:
 
         with result_column:
             if winner:
-                st.success(f"### 🏆 {winner.name}\n{winner.description}\n\n"
-                           f"🕖 {winner.start_hour}:00 · 💵 ${winner.price_min}-{winner.price_max} "
-                           f"· found in {rounds} round(s)")
-                st.text_area("📱 Message for the group chat", group_message(winner))
+                st.success(
+                    f"### 🏆 {winner.name}\n{winner.description}\n\n"
+                    f"🕖 {winner.start_hour}:00 · 💵 ${winner.price_min}-{winner.price_max} "
+                    f"· found in {rounds} round(s)"
+                )
+                st.text_area("📱 Message for the group chat", st.session_state.group_message)
             else:
                 st.error(f"No plan works for everyone after {rounds} round(s).")
 
@@ -231,12 +304,16 @@ with tabs[-1]:
 
         with privacy_column:
             st.markdown("#### 🔍 What left each agent")
-            st.caption("Both lists are shuffled separately: no names, and profiles can't be "
-                       "matched to votes.")
+            st.caption(
+                "Both lists are shuffled separately: no names, and profiles can't be "
+                "matched to votes."
+            )
 
             st.markdown("**📤 Shared profiles** (what the coordinator used to shortlist)")
             for profile in st.session_state.shuffled_profiles:
-                profile_json = profile.model_dump_json(exclude_defaults=True)  # drops None and empty wishes
+                profile_json = profile.model_dump_json(
+                    exclude_defaults=True
+                )  # drops None and empty wishes
                 st.code(profile_json if profile_json != "{}" else "nothing shared", language="json")
 
             st.markdown("**🗳️ Private votes** (veto + scores, no reasons)")
@@ -244,5 +321,7 @@ with tabs[-1]:
                 st.code(vote.model_dump_json(), language="json")
 
             st.markdown("#### 🔒 Never shared")
-            st.markdown(":gray[exact budget · free time · social battery number · "
-                        "tastes text · how my day went · names]")
+            st.markdown(
+                ":gray[exact budget · free time · social battery number · "
+                "tastes text · how my day went · names]"
+            )
