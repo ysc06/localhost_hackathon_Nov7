@@ -1,0 +1,12 @@
+[
+  {"id": 1, "name": "Board game café", "activity": "games", "price_min": 12, "price_max": 18, "start_hour": 19, "noise": "medium", "crowd": "medium", "description": "Hundreds of board games, snacks and drinks, cozy tables."},
+  {"id": 2, "name": "Karaoke private room", "activity": "karaoke", "price_min": 35, "price_max": 50, "start_hour": 21, "noise": "high", "crowd": "low", "description": "Private room for the group, two hours of singing."},
+  {"id": 3, "name": "Indie cinema", "activity": "cinema", "price_min": 15, "price_max": 20, "start_hour": 20, "noise": "low", "crowd": "medium", "description": "Small independent theater, recent releases and classics."},
+  {"id": 4, "name": "Sunset walk on the High Line", "activity": "walk", "price_min": 0, "price_max": 0, "start_hour": 18, "noise": "low", "crowd": "medium", "description": "Elevated park walk with city views, free."},
+  {"id": 5, "name": "Rooftop bar", "activity": "bar", "price_min": 30, "price_max": 60, "start_hour": 21, "noise": "high", "crowd": "high", "description": "Trendy rooftop with DJ and cocktails."},
+  {"id": 6, "name": "Ramen dinner", "activity": "restaurant", "price_min": 18, "price_max": 28, "start_hour": 19, "noise": "medium", "crowd": "medium", "description": "Casual ramen spot, quick service, vegetarian options."},
+  {"id": 7, "name": "Live jazz club", "activity": "concert", "price_min": 25, "price_max": 40, "start_hour": 21, "noise": "medium", "crowd": "medium", "description": "Intimate jazz club, live sets every night."},
+  {"id": 8, "name": "Late museum night", "activity": "museum", "price_min": 0, "price_max": 25, "start_hour": 18, "noise": "low", "crowd": "low", "description": "Museum open late, pay-what-you-wish evenings."},
+  {"id": 9, "name": "Pizza and movie night at home", "activity": "games", "price_min": 8, "price_max": 12, "start_hour": 19, "noise": "low", "crowd": "low", "description": "Split a pizza delivery and stream a movie at someone's place."},
+  {"id": 10, "name": "Club night", "activity": "bar", "price_min": 40, "price_max": 80, "start_hour": 23, "noise": "high", "crowd": "high", "description": "Dance club with a guest DJ, open late."}
+]

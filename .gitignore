@@ -1,0 +1,18 @@
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets & local config
+.env
+.streamlit/secrets.toml
+
+# IDE
+.idea/
+.vscode/
+
+# cognee local storage (private friend datasets: never commit)
+.cognee_system/
+.data_storage/
+**/.cognee_system/
+**/.data_storage/
