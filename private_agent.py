@@ -5,14 +5,14 @@ Reads the friend's PRIVATE data + the PUBLIC plans, returns only a Vote.
 Optionally shares a SharedProfile: closed coarse values the friend ticked, nothing else.
 Nothing else ever leaves this file: no reasons, no names, no notes.
 """
-import asyncio
 import json
 import os
-import threading
 
 import cognee
 from dotenv import load_dotenv
 from openai import OpenAI
+
+from cognee_runtime import run_cognee
 
 from models import (ACTIVITY_TYPES, Friend, Plan, SharedProfile, Vote,
                     battery_to_energy, budget_to_tier)
@@ -30,15 +30,9 @@ LEVEL = {"low": 0, "medium": 1, "high": 2}
 
 
 # ---------- 0. Private cognee memory: one isolated dataset per friend ----------
-# cognee keeps its DB connections bound to the event loop that opened them, so a fresh
-# asyncio.run() per call breaks ("Event loop is closed"), especially under Streamlit reruns.
-# One long-lived loop in a background thread runs every cognee call.
-_cognee_loop = asyncio.new_event_loop()
-threading.Thread(target=_cognee_loop.run_forever, daemon=True).start()
-
-
-def _run_cognee(coro):
-    return asyncio.run_coroutine_threadsafe(coro, _cognee_loop).result()
+# Every cognee call goes through ONE shared event loop (see cognee_runtime.py):
+# a fresh asyncio.run() per call breaks with "Event loop is closed".
+_run_cognee = run_cognee
 
 
 def _dataset(friend_name: str) -> str:

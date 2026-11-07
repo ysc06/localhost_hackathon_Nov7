@@ -37,10 +37,24 @@ This file records the technical decisions made during the hackathon (2026-11-07)
 
 ## 3. How cognee memory is handled
 
-### Layout
-- **One private dataset per person:** `{name}_private`, reused across all the groups that person belongs to. Written by `store_private()` and read by `recall_private()` in `private_agent.py`.
-- **One shared dataset per group** (`multigroup_demo.py`): `group_{id}_shared`, holding **public outcomes only** (chosen activity + veto counts, no names).
-- The coordinator must never read a `*_private` dataset.
+### Layout in the app
+Groups (`friends.py`): `1` = Sam, Lea, Maya · `2` = Sam, Maya · `3` = Maya, Nina.
+- **One private dataset per friend:** `{name}_private`, reused across all their groups. Written by `store_private()` and read by `recall_private()` (CHUNKS search) in `private_agent.py`.
+- **One shared dataset per group:** `group_{id}_shared`, owned by the coordinator. It holds **public outcomes only**: date, chosen plan id + name, veto COUNTS of the final round. No names, no profiles, no votes.
+  - Written by `remember_outcome()` at the end of each `negotiate(..., group_id=...)` with `cognee.add()` **only** (no cognify: instant, no LLM).
+  - Read by `past_outcomes()` with `cognee.datasets.list_data()`: the stored text verbatim, sorted chronologically. A short history needs no semantic search.
+  - Used for **variety**: the last 3 winners get a small ranking penalty and are listed in the LLM shortlist prompt. Shown in each group tab under "🧠 Group memory".
+  - Each entry starts with a timestamp, which also keeps entries unique (cognee deduplicates identical content).
+- The coordinator never reads a `*_private` dataset.
+- **One shared event loop** (`cognee_runtime.py`) for the agents and the coordinator: two loops in one process would break cognee's connections again.
+
+### UI: "I am..."
+- The sidebar picks the current user. You only see **your own** private tab and the **groups you belong to** (Nina sees group 3 only; Maya sees all 3).
+- Sharing is chosen **per group**: you can share your mood with group 3 and nothing with group 1.
+- Other members' agents vote with their own private settings (switch user to edit them). Every setting is kept in `session_state`, so switching users loses nothing.
+
+### Demo only (`multigroup_demo.py`)
+- Same layout on 7 people / 4 overlapping groups, in its own store (`~/.cgdemo`), to test isolation (see below).
 
 ### Search
 - **Always scope the search:** `cognee.search(..., datasets=[f"{name}_private"])`.
@@ -87,5 +101,6 @@ The demo uses its own short store (`~/.cgdemo`) and resets it each run with `cog
 ## 4. Known limits / next steps
 - **Production:** each private memory should live on the user's own device or in a confidential enclave (Tinfoil); the coordinator's machine should physically never hold it.
 - **Use cognee's ACL in the app**, not just `datasets=`: one cognee user per agent and per coordinator.
+- **Group memory reveals some information:** veto counts across overlapping groups (Sam and Maya are together in groups 1 and 2) could hint at who vetoes what.
 - **Cross-group inference:** people who share several groups (A and C) could be narrowed down by comparing veto counts across groups.
 - **`qwen2.5:3b`:** cognee warns it's weak at graph extraction (`llama3.2` recommended), and it sometimes adds "Reserve now!" to group messages.

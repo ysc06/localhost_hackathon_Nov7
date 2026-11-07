@@ -15,12 +15,18 @@ import os
 import re
 import sys
 from collections import Counter
+from datetime import datetime
 from functools import cache
+from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
+import cognee
 from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel
 
+from cognee_runtime import run_cognee
 from models import BUDGET_TIERS, Plan, SharedProfile, Vote, Voter, load_activities
 
 load_dotenv()
@@ -49,6 +55,58 @@ LEVEL = {"low": 0, "medium": 1, "high": 2}
 WISH_MATCH_BONUS = 3
 WITHIN_BUDGET_BONUS = 1
 OVER_BUDGET_PENALTY = -3
+RECENT_WINNER_PENALTY = -2  # group memory: nudge towards variety
+RECENT_OUTCOMES = 3  # how many past outcomes count as "recent"
+
+
+# ---------- Group memory (cognee): PUBLIC outcomes only ----------
+# One dataset per group, `group_{id}_shared`. It holds what the whole group already
+# knows: the chosen plan and veto COUNTS. No names, no profiles, no votes.
+# The coordinator never touches a `*_private` dataset.
+# Written with cognee.add() only (no cognify): instant, no LLM, and read back verbatim
+# with datasets.list_data(), which is all a short history needs.
+def group_dataset(group_id: str) -> str:
+    return f"group_{group_id}_shared"
+
+
+def remember_outcome(group_id: str, winner: Plan | None, plans: list[Plan], votes: list[Vote]) -> None:
+    veto_counts = [sum(vote.veto[index] for vote in votes) for index in range(len(plans))]
+    vetoed = ", ".join(f"{plan.name} x{count}" for plan, count in zip(plans, veto_counts) if count)
+    when = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # also keeps entries unique (cognee dedupes)
+    if winner:
+        text = f"{when}: the group chose plan id {winner.id} ({winner.name})."
+    else:
+        text = f"{when}: no plan worked for everyone."
+    text += f" Veto counts in the final round: {vetoed or 'none'}."
+    try:
+        run_cognee(cognee.add(text, dataset_name=group_dataset(group_id)))
+        log.info("group memory: stored in %s -> %s", group_dataset(group_id), text)
+    except Exception as error:  # memory is a bonus, never a blocker
+        log.warning("group memory: store failed (%s)", type(error).__name__)
+
+
+def past_outcomes(group_id: str) -> list[str]:
+    """This group's past outcomes, oldest first ([] if none or on any error)."""
+    async def _read() -> list[str]:
+        datasets = await cognee.datasets.list_datasets()
+        dataset = next((d for d in datasets if d.name == group_dataset(group_id)), None)
+        if dataset is None:
+            return []
+        rows = await cognee.datasets.list_data(dataset.id)
+        # raw_data_location is a file URL (file:///C:/...): convert it to a local path.
+        texts = [Path(url2pathname(urlparse(row.raw_data_location).path))
+                 .read_text(encoding="utf-8").strip() for row in rows]
+        return sorted(texts)  # each entry starts with its timestamp -> chronological
+    try:
+        return run_cognee(_read())
+    except Exception as error:
+        log.warning("group memory: read failed (%s)", type(error).__name__)
+        return []
+
+
+def recent_winner_ids(history: list[str]) -> set[int]:
+    return {int(plan_id) for line in history[-RECENT_OUTCOMES:]
+            for plan_id in re.findall(r"plan id (\d+)", line)}
 
 
 @cache
@@ -86,9 +144,16 @@ def hint_score(plan: Plan, profiles: list[SharedProfile]) -> int:
     return score
 
 
-def rank_by_hints(plans: list[Plan], profiles: list[SharedProfile]) -> list[Plan]:
-    """Rule-based ranking (B1). Deterministic: ties broken by plan id."""
-    return sorted(plans, key=lambda plan: (-hint_score(plan, profiles), plan.id))
+def rank_by_hints(
+    plans: list[Plan], profiles: list[SharedProfile], recent_ids: set[int] = frozenset()
+) -> list[Plan]:
+    """Rule-based ranking (B1). Deterministic: ties broken by plan id.
+
+    Plans this group picked recently get a small penalty (variety).
+    """
+    def score(plan: Plan) -> int:
+        return hint_score(plan, profiles) + (RECENT_WINNER_PENALTY if plan.id in recent_ids else 0)
+    return sorted(plans, key=lambda plan: (-score(plan), plan.id))
 
 
 def summarize_hints(profiles: list[SharedProfile]) -> str:
@@ -121,7 +186,8 @@ def describe_plan(plan: Plan) -> str:
 
 
 def llm_shortlist(
-    candidates: list[Plan], profiles: list[SharedProfile], rejected: list[Plan]
+    candidates: list[Plan], profiles: list[SharedProfile], rejected: list[Plan],
+    history: list[str] = (),
 ) -> list[int]:
     """Ask the LLM for SHORTLIST_SIZE plan ids. Raises on any failure (caller falls back)."""
     tiers = ", ".join(f"{tier} = ${low}-{high}" for tier, (low, high) in BUDGET_TIERS.items())
@@ -135,6 +201,8 @@ def llm_shortlist(
         + summarize_hints(profiles)
         + "\n\nALREADY REJECTED BY THE GROUP (do not propose again): "
         + (", ".join(plan.name for plan in rejected) or "none")
+        + "\n\nTHIS GROUP'S RECENT OUTCOMES (public group memory; prefer some variety):\n"
+        + ("\n".join(history[-RECENT_OUTCOMES:]) or "none yet")
         + f"\n\nChoose exactly {SHORTLIST_SIZE} different plan ids from the candidates that fit "
         "the hints, but keep some variety for the people who shared nothing.\n"
         'Answer with JSON only: {"plan_ids": [id, id, id, id, id]}'
@@ -167,7 +235,8 @@ def clean_shortlist(llm_ids: list[int], ranked: list[Plan]) -> list[Plan]:
 
 
 def propose_plans(
-    activities: list[Plan], profiles: list[SharedProfile], rejected_ids: set[int]
+    activities: list[Plan], profiles: list[SharedProfile], rejected_ids: set[int],
+    history: list[str] = (),
 ) -> list[Plan]:
     """Shortlist candidate plans: LLM first, rule-based ranking as a safety net."""
     remaining = [plan for plan in activities if plan.id not in rejected_ids]
@@ -176,7 +245,7 @@ def propose_plans(
         log.info("  shortlist: nobody shared anything -> full catalog (%d plans), no LLM call",
                  len(remaining))
         return remaining
-    ranked = rank_by_hints(remaining, profiles)
+    ranked = rank_by_hints(remaining, profiles, recent_winner_ids(list(history)))
     if len(remaining) <= SHORTLIST_SIZE:
         log.info("  shortlist: only %d plans left -> rule-based ranking, no LLM call", len(remaining))
         return ranked  # nothing to choose: skip the LLM
@@ -185,7 +254,7 @@ def propose_plans(
     for line in summarize_hints(profiles).splitlines():
         log.info("    %s", line)
     try:
-        llm_ids = llm_shortlist(remaining, profiles, rejected)
+        llm_ids = llm_shortlist(remaining, profiles, rejected, list(history))
         log.info("  shortlist: LLM answered plan ids %s", llm_ids)
         return clean_shortlist(llm_ids, ranked)
     except Exception as error:  # the demo must never crash
@@ -209,29 +278,38 @@ def pick_plan(plans: list[Plan], votes: list[Vote]) -> Plan | None:
 
 
 def negotiate(
-    profiles: list[SharedProfile], voters: list[Voter], max_rounds: int = 3
+    profiles: list[SharedProfile], voters: list[Voter], max_rounds: int = 3,
+    group_id: str | None = None,
 ) -> tuple[Plan | None, list[Plan], list[Vote], int]:
     """Propose -> private votes -> aggregate, up to max_rounds.
 
     Returns (winner, last_round_plans, last_round_votes, rounds_used).
     max_rounds is capped low on purpose: each failed round tells the coordinator
     a little (which ids failed), so few rounds limits guessing budgets by bisection.
+    With a group_id, the coordinator reads and updates that group's PUBLIC memory.
     """
     activities = list(_catalog())
     rejected_ids: set[int] = set()
     plans: list[Plan] = []
     votes: list[Vote] = []
+    winner: Plan | None = None
     rounds_used = 0
 
     log.info("=" * 60)
-    log.info("NEW NEGOTIATION: everything the coordinator receives")
+    log.info("NEW NEGOTIATION%s: everything the coordinator receives",
+             f" for group {group_id}" if group_id else "")
     log.info("%d anonymous profiles (shuffled, only what users ticked):", len(profiles))
     for profile in profiles:
         log.info("  %s", profile.model_dump_json(exclude_defaults=True).replace("{}", "nothing shared"))
     log.info("%d sealed voters (callables: plans in, Vote out; no Friend inside)", len(voters))
+    history = past_outcomes(group_id) if group_id else []
+    if group_id:
+        log.info("group memory %s: %d past outcome(s)", group_dataset(group_id), len(history))
+        for line in history[-RECENT_OUTCOMES:]:
+            log.info("  %s", line)
 
     while rounds_used < max_rounds:
-        candidates = propose_plans(activities, profiles, rejected_ids)
+        candidates = propose_plans(activities, profiles, rejected_ids, history)
         if not candidates:  # catalog exhausted: stop early
             log.info("catalog exhausted after %d round(s)", rounds_used)
             break
@@ -246,13 +324,16 @@ def negotiate(
         if winner:
             log.info("round %d: winner = %s (best lowest score among non-vetoed)",
                      rounds_used, winner.name)
-            return winner, plans, votes, rounds_used
+            break
         # Only reached if every plan was vetoed. We learn the ids, not the reasons.
         rejected_ids |= {plan.id for plan in plans}
         log.info("round %d: every plan vetoed -> rejected ids so far %s (no reasons, no names)",
                  rounds_used, sorted(rejected_ids))
-    log.info("no plan works for everyone after %d round(s)", rounds_used)
-    return None, plans, votes, rounds_used
+    if not winner:
+        log.info("no plan works for everyone after %d round(s)", rounds_used)
+    if group_id and plans:
+        remember_outcome(group_id, winner, plans, votes)
+    return winner, plans, votes, rounds_used
 
 
 class GroupMessage(BaseModel):
