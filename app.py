@@ -120,7 +120,7 @@ SHARE_LABELS = {
 
 # ---------- UI ----------
 st.set_page_config(page_title="No more 'whatever you want'", page_icon="🎯", layout="wide")
-st.title('🎯 No more "whatever you want"')
+st.title('🎯 Settled')
 st.caption(
     "You choose what your agent shares. Share nothing, you're still protected. "
     "Share more, you get better plans."
