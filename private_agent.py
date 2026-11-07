@@ -2,6 +2,7 @@
 Person A: one private agent per friend.
 
 Reads the friend's PRIVATE data + the PUBLIC plans, returns only a Vote.
+Optionally shares a SharedProfile: closed coarse values the friend ticked, nothing else.
 Nothing else ever leaves this file: no reasons, no names, no notes.
 """
 import asyncio
@@ -12,7 +13,8 @@ import cognee
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from models import Friend, Plan, Vote
+from models import (ACTIVITY_TYPES, Friend, Plan, SharedProfile, Vote,
+                    battery_to_energy, budget_to_tier)
 
 load_dotenv()
 
@@ -115,6 +117,58 @@ def private_vote(friend: Friend, plans: list[Plan]) -> Vote:
     except Exception:
         scores = rule_scores(friend, plans)
     return Vote(veto=veto, scores=scores)
+
+
+# ---------- Privacy dial (contract): share ONLY the ticked fields ----------
+MOODS = ("tired", "neutral", "festive")
+
+
+def _llm_mood_wishes(friend: Friend) -> tuple[str, list[str]]:
+    """LLM maps the PRIVATE day note + tastes to CLOSED public values only."""
+    prompt = f"""Map this person to closed categories. Do not repeat any of their words.
+- How the day went: {friend.day_note}
+- Tastes: {friend.tastes}
+- Social battery: {friend.social_battery}/5
+
+Reply JSON only: {{"mood": one of {list(MOODS)}, "wishes": a list of 0-3 items from {sorted(ACTIVITY_TYPES)}}}"""
+    resp = client.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"},
+        temperature=0,
+    )
+    data = json.loads(resp.choices[0].message.content)
+    mood = data["mood"] if data.get("mood") in MOODS else _rule_mood(friend)
+    return mood, [w for w in data.get("wishes", []) if w in ACTIVITY_TYPES]
+
+
+def _rule_mood(friend: Friend) -> str:
+    b = friend.social_battery
+    return "tired" if b <= 2 else "neutral" if b == 3 else "festive"
+
+
+def _rule_wishes(friend: Friend) -> list[str]:
+    tastes = friend.tastes.lower()
+    return [a for a in ACTIVITY_TYPES if a in tastes or a.rstrip("s") in tastes]
+
+
+def share_profile(friend: Friend, allowed: set[str]) -> SharedProfile:
+    """Fill ONLY the fields in `allowed`; everything else stays None / []."""
+    shared = {}
+    if "budget_tier" in allowed:
+        shared["budget_tier"] = budget_to_tier(friend.budget)  # a bucket, never the amount
+    if "energy" in allowed:
+        shared["energy"] = battery_to_energy(friend.social_battery)
+    if {"mood", "wishes"} & allowed:
+        try:
+            mood, wishes = _llm_mood_wishes(friend)
+        except Exception:
+            mood, wishes = _rule_mood(friend), _rule_wishes(friend)
+        if "mood" in allowed:
+            shared["mood"] = mood
+        if "wishes" in allowed:
+            shared["wishes"] = wishes
+    return SharedProfile(**shared)  # validator drops anything not a public activity type
 
 
 def isolation_test() -> None:
