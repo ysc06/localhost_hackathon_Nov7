@@ -36,6 +36,22 @@ Branch: `setup-env` (not pushed yet: GitHub returned 403, `Fitiantsoa` needs col
   min-vs-average check passes.
 - No import of `Friend` or `private_agent`.
 
-### B2: AI shortlist (todo)
-### B3: group message (todo)
-### B4: red-team (todo)
+### B2: AI shortlist (done)
+- Local LLM via Ollama (`OpenAI(base_url="http://localhost:11434/v1")`), model from `LLM_MODEL` in `.env` (`qwen2.5:3b`).
+- `summarize_hints`: profiles aggregated into COUNTS before reaching the LLM (e.g. `energy (2 shared): 1 high, 1 low`).
+- `llm_shortlist`: public catalog + hint counts + already-rejected plans → `{"plan_ids": [...]}`, validated by pydantic `Proposal`.
+- `clean_shortlist`: keeps only real ids, dedupes, tops up from the rule-based ranking (never random).
+- Nobody shared → no LLM call, full catalog. ≤5 plans left → no LLM call. Any LLM error → rule-based ranking.
+- Tests: LLM shortlists returned for both hint scenarios; hint summary checked for names/private words;
+  `clean_shortlist([99, 3, 3, -1])` → `[3, 1, 4, 6, 8]`; LLM offline → rule-based ranking, no crash.
+### B3: group message (done)
+- `group_message(plan)`: LLM gets ONLY the public plan (never votes or profiles), JSON `{"message"}` validated by pydantic.
+- Post-processing: hashtags stripped, max 2 lines; number guard: any number not from the plan
+  (e.g. an invented end time "23:00") → template fallback. Any LLM error → template.
+- Known limit: qwen2.5:3b still sometimes adds "Reserve now!" despite the prompt.
+### B4: red-team (done)
+- `redteam.py` rebuilds exactly what the coordinator sees: 5 public plans (from the real `propose_plans`),
+  3 anonymous shuffled profiles (one empty), 3 anonymous shuffled votes. Prints it first.
+- It imports neither `Friend` nor `private_agent`: the private data is not even in the process.
+- 3 prompt injections (Lea's day, Sam's exact budget, who is tired): qwen2.5:3b answered all three
+  "no such information"; even a specific answer would be a hallucination, not a leak.
