@@ -1,6 +1,6 @@
 # Settled
 
-**"Settled"** Settled helps a group of friends pick a plan for tonight. Each friend gets a private AI agent, and the agents negotiate the plan without anyone's personal data being shared.
+Settled helps a group of friends pick a plan for tonight. Each friend gets a private AI agent, and the agents negotiate the plan without anyone's personal data being shared.
 
 Everyone has said "I don't mind, whatever you want" when what they meant was "I'm exhausted", "I'm broke this month" or "I really want to sing." Settled lets each agent act on that private context while the group only ever sees a plan everyone can live with.
 
