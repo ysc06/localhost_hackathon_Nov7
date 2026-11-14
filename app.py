@@ -215,7 +215,7 @@ def show_result(group_id: str) -> None:
     # ---------- Discovery & Booking Agent (only the public winning plan leaves) ----------
     if winner:
         st.divider()
-        st.markdown("### Turn Your Plan Into Reality 🚀")
+        st.markdown("### Turn Your Plan Into Reality")
         st.caption(f"Winning activity: **{winner.name}**. Only this public plan + "
                    "the city/date below are sent to Google. No friend data, votes or memory.")
         city_column, date_column = st.columns(2)
@@ -248,7 +248,7 @@ for tab, group_id in zip(tabs[1:], my_groups, strict=True):
         st.caption(f"📤 {shared_count} fields shared out of {len(members) * len(SHAREABLE_FIELDS)} "
                    "possible in this group · other members' agents use their own private settings")
 
-        if st.button("🎲 Find a plan", type="primary", key=f"find_{group_id}"):
+        if st.button("Find a plan", type="primary", key=f"find_{group_id}"):
             with st.spinner("Agents are voting privately..."):
                 profiles = [share_profile(friends[name], sharing.get((name, group_id), set()))
                             for name in members]
