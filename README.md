@@ -43,7 +43,7 @@ Everyone has said "I don't mind, whatever you want" when what they meant was "I'
 4. **Group message.** The LLM writes a short invite for the group chat from the public plan only. A number guard rejects invented times or prices.
 5. **Discovery & Booking agent** (`booking_agent.py`). It turns the winner into real places via the Google Places API, or into plain Google Maps / Search links if no key is set. It never invents businesses and never books anything.
 ## Video Walkthrough 
-[(https://www.youtube.com/watch?v=X2i7PnbwtN4)]
+[https://www.youtube.com/watch?v=X2i7PnbwtN4]
 ## Privacy guarantees
 
 | Never leaves a friend's agent | May leave (if the friend ticks it) | Always leaves |
