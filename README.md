@@ -28,7 +28,7 @@ Everyone has said "I don't mind, whatever you want" when what they meant was "I'
                       shortlist → vote → drop vetoed → repeat (≤ 3 rounds)
                                          │
                                          ▼
-                        🏆 winning plan + group-chat message
+                         winning plan + group-chat message
                                          │
                                          ▼
                                   booking_agent.py
@@ -93,9 +93,9 @@ The app still runs if `private_agent.py` or `friends.py` can't load: it falls ba
 
 ## Using the app
 
-1. Open a friend's 🔒 tab and adjust their social battery, budget, free time, tastes and day note.
+1. Open a friend's tab and adjust their social battery, budget, free time, tastes and day note.
 2. Tick what that friend agrees to share (all boxes start unchecked).
-3. In 👥 **Group**, click **🎲 Find a plan**. You'll see the winner, a group-chat message, every candidate's veto/score summary, and exactly what left each agent.
+3. In **Group**, click ** Find a plan**. You'll see the winner, a group-chat message, every candidate's veto/score summary, and exactly what left each agent.
 4. Under **Turn Your Plan Into Reality**, enter a city and date, then click **📍 Find Places**.
 
 ## Demos & tests
