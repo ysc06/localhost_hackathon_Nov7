@@ -6,7 +6,7 @@ Settled helps a group of friends pick a plan for tonight. Each friend gets a pri
 
 Everyone has said "I don't mind, whatever you want" when what they meant was "I'm exhausted", "I'm broke this month" or "I really want to sing." Settled lets each agent act on that private context while the group only ever sees a plan everyone can live with.
 
----
+
 ## Video Walkthrough 
 [https://www.youtube.com/watch?v=X2i7PnbwtN4]
 
